@@ -1,0 +1,157 @@
+name: 🇭🇺 Translate Missing Keys
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Csak előnézet (nem commitol)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+  push:
+    paths:
+      - 'hu.json'
+
+jobs:
+  translate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 📥 Checkout repo
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install dependencies
+        run: pip install openai
+
+      - name: 🔍 Find untranslated keys
+        id: check
+        run: |
+          python - <<'EOF'
+          import json, os
+
+          with open('hu.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+
+          untranslated = {k: v for k, v in data.items() if k == v and len(k) > 3}
+          
+          print(f"📊 Összesen: {len(data)} elem")
+          print(f"🔴 Lefordítatlan: {len(untranslated)} elem")
+          print(f"🟢 Lefordított: {len(data) - len(untranslated)} elem")
+          
+          with open('untranslated.json', 'w', encoding='utf-8') as f:
+              json.dump(untranslated, f, ensure_ascii=False, indent=2)
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"count={len(untranslated)}\n")
+          EOF
+
+      - name: 🤖 Translate with OpenAI
+        if: steps.check.outputs.count != '0'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python - <<'PYEOF'
+          import json, os
+          from openai import OpenAI
+
+          client = OpenAI()
+
+          with open('hu.json', 'r', encoding='utf-8') as f:
+              hu_data = json.load(f)
+
+          with open('untranslated.json', 'r', encoding='utf-8') as f:
+              untranslated = json.load(f)
+
+          if not untranslated:
+              print("✅ Nincs lefordítatlan elem!")
+              exit(0)
+
+          # Batch-ekben fordítunk (max 40 elem egyszerre)
+          keys = list(untranslated.keys())
+          batch_size = 40
+          translated_count = 0
+
+          for i in range(0, len(keys), batch_size):
+              batch = {k: untranslated[k] for k in keys[i:i+batch_size]}
+              batch_num = i // batch_size + 1
+              total_batches = (len(keys) + batch_size - 1) // batch_size
+              print(f"\n🔄 Batch {batch_num}/{total_batches} ({len(batch)} elem)...")
+
+              prompt = f"""Fordítsd le az alábbi pyVideoTrans szoftver UI elemeket angolról magyarra.
+          Ez egy videó fordító/szinkronizáló szoftver. A fordítás legyen:
+          - Természetes, tömör magyar
+          - Technikai/API nevek (pl. ElevenLabs, GPT-SoVITS, Azure) maradjanak angolul
+          - Menüelemek, gombok legyenek rövidek
+          - Hibaüzenetek, leírások legyenek érthetőek
+
+          JSON formátumban válaszolj, CSAK a lefordított kulcs-érték párokat:
+          {json.dumps(batch, ensure_ascii=False, indent=2)}"""
+
+              try:
+                  response = client.chat.completions.create(
+                      model="gpt-4o-mini",
+                      messages=[
+                          {"role": "system", "content": "Magyar szoftver lokalizáló vagy. JSON-ben válaszolj."},
+                          {"role": "user", "content": prompt}
+                      ],
+                      temperature=0.3,
+                      response_format={"type": "json_object"}
+                  )
+
+                  result = json.loads(response.choices[0].message.content)
+                  for k, v in result.items():
+                      if k in hu_data:
+                          hu_data[k] = v
+                          translated_count += 1
+                          print(f"  ✅ {k[:50]}... → {v[:50]}...")
+
+              except Exception as e:
+                  print(f"  ❌ Batch hiba: {e}")
+                  continue
+
+          # Mentés
+          with open('hu.json', 'w', encoding='utf-8') as f:
+              json.dump(hu_data, f, ensure_ascii=False, indent=4)
+
+          print(f"\n🎉 Összesen lefordítva: {translated_count} új elem")
+
+          with open(os.environ['GITHUB_SUMMARY'], 'a') as f:
+              f.write(f"## 🇭🇺 Fordítás eredmény\n")
+              f.write(f"- **{translated_count}** új fordítás hozzáadva\n")
+              f.write(f"- **{len(hu_data)}** összes elem\n")
+              f.write(f"- Modell: gpt-4o-mini\n")
+          PYEOF
+
+      - name: 📊 Validation
+        run: |
+          python -c "
+          import json
+          with open('hu.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          untranslated = sum(1 for k,v in data.items() if k == v and len(k) > 3)
+          print(f'✅ JSON valid | Összes: {len(data)} | Még lefordítatlan: {untranslated}')
+          "
+
+      - name: 📤 Commit & Push
+        if: steps.check.outputs.count != '0' && inputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add hu.json
+          git diff --cached --quiet || (git commit -m "🇭🇺 Auto-translate: új magyar fordítások [skip ci]" && git push)
+
+      - name: 📋 Summary
+        if: always()
+        run: |
+          echo "### ✅ Workflow kész!" >> $GITHUB_STEP_SUMMARY
+          echo "Részletek fent a lépéseknél." >> $GITHUB_STEP_SUMMARY

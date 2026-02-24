@@ -1,0 +1,47 @@
+name: ✅ Validate hu.json
+
+on:
+  pull_request:
+    paths:
+      - 'hu.json'
+  push:
+    paths:
+      - 'hu.json'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🔍 Validate JSON & Stats
+        run: |
+          python - <<'EOF'
+          import json, sys
+
+          try:
+              with open('hu.json', 'r', encoding='utf-8') as f:
+                  data = json.load(f)
+              print(f"✅ Valid JSON - {len(data)} elem")
+          except json.JSONDecodeError as e:
+              print(f"❌ Invalid JSON: {e}")
+              sys.exit(1)
+
+          total = len(data)
+          untranslated = sum(1 for k,v in data.items() if k == v and len(k) > 3)
+          translated = total - untranslated
+          pct = (translated / total) * 100 if total else 0
+
+          import os
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(f"## 🇭🇺 hu.json Statisztika\n")
+              f.write(f"| Metrika | Érték |\n|---|---|\n")
+              f.write(f"| Összes elem | {total} |\n")
+              f.write(f"| Lefordított | {translated} ({pct:.1f}%) |\n")
+              f.write(f"| Lefordítatlan | {untranslated} |\n")
+
+          if untranslated > 0:
+              print(f"⚠️ {untranslated} lefordítatlan elem maradt")
+          else:
+              print("🎉 100% lefordítva!")
+          EOF
