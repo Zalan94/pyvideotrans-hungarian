@@ -125,12 +125,15 @@ jobs:
 
           print(f"\n🎉 Összesen lefordítva: {translated_count} új elem")
 
-          with open(os.environ['GITHUB_SUMMARY'], 'a') as f:
-              f.write(f"## 🇭🇺 Fordítás eredmény\n")
-              f.write(f"- **{translated_count}** új fordítás hozzáadva\n")
-              f.write(f"- **{len(hu_data)}** összes elem\n")
-              f.write(f"- Modell: gpt-4o-mini\n")
+          with open('translate_summary.txt', 'w') as f:
+              f.write(f"{translated_count} new, {len(hu_data)} total")
           PYEOF
+          if [ -f translate_summary.txt ]; then
+            SUMMARY=$(cat translate_summary.txt)
+            echo "## 🇭🇺 Fordítás eredmény" >> $GITHUB_STEP_SUMMARY
+            echo "- $SUMMARY" >> $GITHUB_STEP_SUMMARY
+            echo "- Modell: gpt-4o-mini" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 📊 Validation
         run: |
